@@ -1,16 +1,24 @@
 import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
   return {
-    name: "Att School Attendance",
-    short_name: "Att",
-    description: "Offline-first school arrival and departure attendance.",
-    start_url: "/",
+    name: "School Attendance",
+    short_name: "Attendance",
+    description: "Offline-first school arrival and departure attendance tracker",
+    start_url: `${basePath}/`,
+    scope: `${basePath}/`,
     display: "standalone",
-    background_color: "#f4f7fb",
-    theme_color: "#102a43",
+    background_color: "#f7f8fb",
+    theme_color: "#111827",
     icons: [
-      { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" },
+      {
+        src: `${basePath}/icon.svg`,
+        sizes: "any",
+        type: "image/svg+xml",
+        purpose: "any",
+      },
     ],
   };
 }
