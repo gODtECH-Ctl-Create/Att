@@ -21,6 +21,4 @@ export type AttendanceRecord = {
 
 export type SyncResponse = {
   syncedIds: string[];
-  mode: "google-sheets" | "local-only";
-  message?: string;
 };
