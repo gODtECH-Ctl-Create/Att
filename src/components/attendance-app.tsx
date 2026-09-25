@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { db } from "@/lib/db";
+import {
+  fetchStudentsFromSheets,
+  isSheetsConfigured,
+  syncAttendanceToSheets,
+} from "@/lib/sheets-client";
 import { formatSchoolDate, formatSchoolTime, getSchoolDateKey } from "@/lib/time";
-import type { AttendanceRecord, Student, SyncResponse } from "@/lib/types";
+import type { AttendanceRecord, Student } from "@/lib/types";
 
 function recordId(date: string, studentId: string) {
   return `${date}:${studentId}`;
@@ -17,7 +22,7 @@ export function AttendanceApp() {
   const [query, setQuery] = useState("");
   const [online, setOnline] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
-  const [dataMode, setDataMode] = useState<"demo" | "google-sheets" | "offline">("offline");
+  const [dataMode, setDataMode] = useState<"google-sheets" | "offline" | "setup">("offline");
 
   const refreshLocalState = useCallback(async () => {
     const [cachedStudents, records] = await Promise.all([
@@ -31,21 +36,13 @@ export function AttendanceApp() {
   }, [today]);
 
   const syncPending = useCallback(async () => {
-    if (!navigator.onLine) return;
+    if (!navigator.onLine || !isSheetsConfigured()) return;
 
     const pending = await db.attendance.filter((record) => !record.synced).toArray();
     if (!pending.length) return;
 
     try {
-      const response = await fetch("/api/attendance/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ records: pending }),
-      });
-
-      if (!response.ok && response.status !== 202) return;
-
-      const result = (await response.json()) as SyncResponse;
+      const result = await syncAttendanceToSheets(pending);
       if (result.syncedIds.length) {
         await db.transaction("rw", db.attendance, async () => {
           for (const id of result.syncedIds) {
@@ -54,27 +51,27 @@ export function AttendanceApp() {
         });
       }
 
+      setDataMode("google-sheets");
       await refreshLocalState();
     } catch {
-      // Offline-first: records remain queued locally for the next sync attempt.
+      // Records remain queued in IndexedDB until the next successful sync.
     }
   }, [refreshLocalState]);
 
   const loadStudents = useCallback(async () => {
+    if (!isSheetsConfigured()) {
+      setDataMode("setup");
+      await refreshLocalState();
+      return;
+    }
+
     try {
-      const response = await fetch("/api/students", { cache: "no-store" });
-      if (!response.ok) throw new Error("Student request failed");
-
-      const payload = (await response.json()) as {
-        students: Student[];
-        mode: "demo" | "google-sheets";
-      };
-
+      const sheetStudents = await fetchStudentsFromSheets();
       await db.transaction("rw", db.students, async () => {
         await db.students.clear();
-        await db.students.bulkPut(payload.students);
+        await db.students.bulkPut(sheetStudents);
       });
-      setDataMode(payload.mode);
+      setDataMode("google-sheets");
     } catch {
       setDataMode("offline");
     }
@@ -151,6 +148,13 @@ export function AttendanceApp() {
     };
   }, [attendance, students.length]);
 
+  const sourceLabel =
+    dataMode === "google-sheets"
+      ? "Google Sheets connected"
+      : dataMode === "setup"
+        ? "Sheets setup required"
+        : "Using offline cache";
+
   return (
     <main className="shell">
       <section className="hero">
@@ -163,9 +167,7 @@ export function AttendanceApp() {
           <span className={`pill ${online ? "online" : "offline"}`}>
             {online ? "Online" : "Offline"}
           </span>
-          <span className="pill neutral">
-            {dataMode === "google-sheets" ? "Google Sheets connected" : dataMode === "demo" ? "Demo data" : "Offline data"}
-          </span>
+          <span className="pill neutral">{sourceLabel}</span>
         </div>
       </section>
 
@@ -175,6 +177,13 @@ export function AttendanceApp() {
         <article><strong>{stats.inSchool}</strong><span>In school</span></article>
         <article><strong>{stats.left}</strong><span>Left</span></article>
       </section>
+
+      {dataMode === "setup" && students.length === 0 && (
+        <div className="sync-banner">
+          <strong>Google Sheets is not connected yet.</strong>
+          <span> Add the Apps Script deployment URL as the repository variable NEXT_PUBLIC_APPS_SCRIPT_URL.</span>
+        </div>
+      )}
 
       {pendingCount > 0 && (
         <div className="sync-banner">
@@ -235,7 +244,7 @@ export function AttendanceApp() {
           );
         })}
 
-        {visibleStudents.length === 0 && (
+        {visibleStudents.length === 0 && dataMode !== "setup" && (
           <div className="empty">No students match this filter.</div>
         )}
       </section>
