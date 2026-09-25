@@ -35,7 +35,7 @@ jobs:
       - name: Build static site
         run: npm run build
         env:
-          NEXT_PUBLIC_APPS_SCRIPT_URL: ${{ vars.NEXT_PUBLIC_APPS_SCRIPT_URL }}
+          NEXT_PUBLIC_APPS_SCRIPT_URL: https://script.google.com/macros/s/AKfycbyX98m7JhPjxjcR9etT0224ppqrhWfPpoHOIfOYxIfpkzdfPLejbrdvapT9O0GByomG/exec
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
