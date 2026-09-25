@@ -1,5 +1,10 @@
-const CACHE_NAME = "att-shell-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "att-shell-v2";
+const BASE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
+const APP_SHELL = [
+  `${BASE_PATH}/`,
+  `${BASE_PATH}/manifest.webmanifest`,
+  `${BASE_PATH}/icon.svg`,
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -19,19 +24,17 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
-    return;
-  }
+  if (request.method !== "GET" || url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request)
         .then((response) => {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
+          caches.open(CACHE_NAME).then((cache) => cache.put(`${BASE_PATH}/`, copy));
           return response;
         })
-        .catch(() => caches.match("/")),
+        .catch(() => caches.match(`${BASE_PATH}/`)),
     );
     return;
   }
