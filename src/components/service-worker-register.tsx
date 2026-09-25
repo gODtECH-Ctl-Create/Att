@@ -6,8 +6,12 @@ export function ServiceWorkerRegister() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    const serviceWorkerUrl = `${basePath}/sw.js`;
+    const scope = `${basePath}/`;
+
     const register = () => {
-      navigator.serviceWorker.register("/sw.js").catch((error) => {
+      navigator.serviceWorker.register(serviceWorkerUrl, { scope }).catch((error) => {
         console.error("Service worker registration failed", error);
       });
     };
