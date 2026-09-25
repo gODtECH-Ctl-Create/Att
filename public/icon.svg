@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Att school attendance">
+  <rect width="512" height="512" rx="112" fill="#102a43"/>
+  <path d="M128 176h256v192H128z" fill="#ffffff" opacity="0.96"/>
+  <path d="M104 176 256 88l152 88-152 88z" fill="#1363df"/>
+  <path d="M170 224h172v30H170zm0 58h112v30H170z" fill="#102a43"/>
+  <circle cx="330" cy="309" r="54" fill="#13795b"/>
+  <path d="m305 309 17 18 34-39" fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
