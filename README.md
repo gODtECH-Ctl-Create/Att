@@ -1,6 +1,6 @@
 # Att
 
-Offline-first school attendance PWA hosted on **GitHub Pages**, with **Google Sheets as the permanent datastore**.
+Offline-first school attendance PWA hosted on **GitHub Pages**, with **Google Sheets as the permanent datastore** and Apps Script enforcing staff access.
 
 ## Architecture
 
@@ -15,78 +15,102 @@ Attendance PWA
     │
     └── Google Apps Script Web App
             │
+            ├── Staff authentication + sessions
+            │
             ▼
        Google Sheets
        ├── Students
-       └── Attendance
+       ├── Attendance
+       └── Staff
 ```
 
-There is **no separate database server**. Google Sheets is the source of truth. IndexedDB only keeps a local copy of students and unsynced attendance while a device is offline.
+There is **no separate database server**. Google Sheets is the source of truth. IndexedDB only keeps a local copy of students and unsynced attendance while a previously authenticated device is offline.
 
 ## Google Sheet structure
 
-Create a Google Sheet, then open **Extensions → Apps Script** and paste the contents of:
+Open **Extensions → Apps Script** in the attendance spreadsheet and paste the latest contents of:
 
 ```text
 google-apps-script/Code.gs
 ```
 
-Run this function once from Apps Script:
+Run this function once after updating the script:
 
 ```text
 setupAttendanceWorkbook
 ```
 
-It creates the required tabs and headers.
+It creates or updates the required tabs and headers.
 
 ### Students tab
 
 | Student ID | Name | Class | Status |
 |---|---|---|---|
 | ST001 | Mary James | Primary 4 | Active |
-| ST002 | John Ade | Primary 4 | Active |
 
 ### Attendance tab
 
-| Date | Student ID | Student Name | Class | Arrival | Departure | Updated At |
-|---|---|---|---|---|---|---|
+| Date | Student ID | Student Name | Class | Arrival | Departure | Updated At | Updated By |
+|---|---|---|---|---|---|---|---|
 
-One student gets one attendance row per day. Pressing **Arrived** writes the arrival time. Pressing **Mark left** later updates the same row with the departure time.
+One student gets one attendance row per day. Pressing **Arrived** writes the arrival time. Pressing **Mark left** later updates the same row with the departure time. `Updated By` records the signed-in staff member who last updated the row.
 
-## Deploy the Apps Script bridge
+### Staff tab
 
-From Apps Script:
+| Username | Name | PIN Hash | Salt | Role | Status |
+|---|---|---|---|---|---|
 
-1. Select **Deploy → New deployment**.
-2. Choose **Web app**.
-3. Execute the app as yourself.
-4. Choose the access option appropriate for the school setup.
-5. Deploy and copy the `/exec` URL.
+Plain PINs are never stored in the sheet. Apps Script stores a salted SHA-256 hash.
 
-The URL will look similar to:
+## Create the first staff account
+
+After running `setupAttendanceWorkbook`:
+
+1. Reload the Google Sheet.
+2. Open **Attendance Admin → Add staff account** from the sheet menu.
+3. Enter a unique username.
+4. Enter the staff member's display name.
+5. Enter a PIN with at least 6 characters.
+6. Enter `Admin` or `Staff` as the role.
+
+The app limits repeated failed sign-in attempts and issues a 12-hour session after a successful login.
+
+## Update the Apps Script deployment
+
+Because Apps Script is deployed separately from GitHub Pages, changes to `google-apps-script/Code.gs` must also be deployed in Google:
+
+1. Paste the latest `Code.gs` into **Extensions → Apps Script**.
+2. Save.
+3. Run `setupAttendanceWorkbook` once.
+4. Select **Deploy → Manage deployments**.
+5. Edit the existing Web app deployment.
+6. Select **New version**.
+7. Deploy.
+
+Keep the same `/exec` URL. The GitHub Pages app is already configured to use it.
+
+## Staff access flow
 
 ```text
-https://script.google.com/macros/s/.../exec
+Staff username + PIN
+        │
+        ▼
+Google Apps Script
+        │
+        ├── validates salted PIN hash in Staff sheet
+        └── issues temporary session token
+                │
+                ▼
+        Students / Attendance access
 ```
 
-## Connect GitHub Pages to the Sheet
+The session token is stored on the device and expires after 12 hours. When offline, a device with a still-valid session can continue using its cached student list and queue attendance locally. Sync resumes when internet access returns.
 
-In this GitHub repository:
+## GitHub Pages
 
-1. Go to **Settings → Secrets and variables → Actions → Variables**.
-2. Create a repository variable named:
+The workflow in `.github/workflows/deploy-pages.yml` builds the static Next.js export and publishes `out/` to GitHub Pages.
 
-```text
-NEXT_PUBLIC_APPS_SCRIPT_URL
-```
-
-3. Set its value to the Apps Script `/exec` URL.
-4. Go to **Settings → Pages** and set the source to **GitHub Actions**.
-5. Re-run the Pages workflow or push a commit to `main`.
-
-The workflow in `.github/workflows/deploy-pages.yml` builds the static Next.js export and publishes the `out/` directory to GitHub Pages.
-
-Expected project URL:
+Project URL:
 
 ```text
 https://godtech-ctl-create.github.io/Att/
@@ -94,19 +118,19 @@ https://godtech-ctl-create.github.io/Att/
 
 ## Offline behaviour
 
-When the device has internet access:
+Online:
 
 ```text
-PWA → Apps Script → Google Sheets
+PWA → authenticated Apps Script → Google Sheets
 ```
 
-When internet access is unavailable:
+Offline after a successful staff login:
 
 ```text
 PWA → IndexedDB
 ```
 
-The teacher can continue marking students as arrived or left. When connectivity returns, pending records are synchronized to Google Sheets automatically.
+When connectivity returns, pending records synchronize automatically. If the staff session has expired, the app asks the staff member to sign in again before synchronization can continue.
 
 ## Local development
 
@@ -129,8 +153,11 @@ Open:
 http://localhost:3000
 ```
 
-## Security note
+## Security
 
-GitHub Pages is a public static host. Do not place Google service-account private keys, passwords, or other secrets in this repository or in `NEXT_PUBLIC_*` environment variables.
-
-The current Apps Script bridge is suitable for initial development and controlled testing. Before storing real student attendance in production, add staff authentication/access control to the Apps Script endpoint or use Google-account-based authorization.
+- No Google service-account private key is stored in GitHub Pages.
+- Staff PINs are not stored in plain text.
+- Student and attendance endpoints require a valid staff session.
+- Five failed sign-in attempts temporarily lock that username for 10 minutes.
+- Staff can be disabled by setting their `Status` to `Inactive` in the Staff sheet.
+- The GitHub Pages repository remains public, but access to live student data is enforced by Apps Script.

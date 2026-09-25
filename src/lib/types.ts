@@ -21,4 +21,13 @@ export type AttendanceRecord = {
 
 export type SyncResponse = {
   syncedIds: string[];
+  message?: string;
+};
+
+export type StaffSession = {
+  token: string;
+  username: string;
+  name: string;
+  role: string;
+  expiresAt: string;
 };
