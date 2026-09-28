@@ -1,22 +1,40 @@
 const STUDENTS_SHEET = "Students";
 const ATTENDANCE_SHEET = "Attendance";
 const STAFF_SHEET = "Staff";
+const SCHOOL_TIME_ZONE = "Africa/Lagos";
 const SESSION_PREFIX = "attendance_session_";
 const SESSION_HOURS = 12;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_SECONDS = 600;
 
 function doGet(e) {
-  const action = (e && e.parameter && e.parameter.action) || "health";
+  const params = (e && e.parameter) || {};
+  const action = params.action || "health";
 
   if (action === "health") {
     return jsonResponse({ ok: true });
   }
 
   if (action === "students") {
-    const session = getSession_((e.parameter && e.parameter.token) || "");
+    const session = getSession_(params.token || "");
     if (!session) return jsonResponse({ ok: false, error: "unauthorized" });
     return jsonResponse({ ok: true, students: getStudents_(), staff: publicSession_(session) });
+  }
+
+  if (action === "attendance") {
+    const session = getSession_(params.token || "");
+    if (!session) return jsonResponse({ ok: false, error: "unauthorized" });
+
+    const date = String(params.date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return jsonResponse({ ok: false, error: "A valid attendance date is required." });
+    }
+
+    return jsonResponse({
+      ok: true,
+      attendance: getAttendanceByDate_(date),
+      staff: publicSession_(session),
+    });
   }
 
   return jsonResponse({ ok: false, error: "Unknown action" });
@@ -279,6 +297,37 @@ function getStudents_() {
     });
 }
 
+function getAttendanceByDate_(date) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(ATTENDANCE_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getValues();
+
+  return rows
+    .filter(function (row) {
+      return normalizeDate_(row[0]) === date && String(row[1] || "").trim();
+    })
+    .map(function (row) {
+      const studentId = String(row[1] || "").trim();
+      const arrivalAt = toIsoString_(row[4]);
+      const departureAt = toIsoString_(row[5]);
+      const updatedAt = toIsoString_(row[6]) || departureAt || arrivalAt || (date + "T00:00:00.000Z");
+
+      return {
+        id: date + ":" + studentId,
+        studentId: studentId,
+        studentName: String(row[2] || "").trim(),
+        className: String(row[3] || "").trim(),
+        date: date,
+        arrivalAt: arrivalAt || undefined,
+        departureAt: departureAt || undefined,
+        updatedAt: updatedAt,
+        synced: true,
+      };
+    });
+}
+
 function syncAttendance_(records, session) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -357,9 +406,19 @@ function ensureHeaders_(sheet, headers) {
 function normalizeDate_(value) {
   if (!value) return "";
   if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value)) {
-    return Utilities.formatDate(value, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return Utilities.formatDate(value, SCHOOL_TIME_ZONE, "yyyy-MM-dd");
   }
   return String(value).trim();
+}
+
+function toIsoString_(value) {
+  if (!value) return "";
+  if (Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value)) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? "" : parsed.toISOString();
 }
 
 function jsonResponse(data) {

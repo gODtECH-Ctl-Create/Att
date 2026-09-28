@@ -1,10 +1,11 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearStaffSession, getStoredStaffSession, saveStaffSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
+  fetchAttendanceFromSheets,
   fetchStudentsFromSheets,
   isAuthError,
   isSheetsConfigured,
@@ -20,7 +21,10 @@ function recordId(date: string, studentId: string) {
 }
 
 export function AttendanceApp() {
-  const today = useMemo(() => getSchoolDateKey(), []);
+  const initialDate = useMemo(() => getSchoolDateKey(), []);
+  const currentDateRef = useRef(initialDate);
+  const [currentDate, setCurrentDate] = useState(initialDate);
+  const [selectedDate, setSelectedDate] = useState(initialDate);
   const [students, setStudents] = useState<Student[]>([]);
   const [attendance, setAttendance] = useState<Record<string, AttendanceRecord>>({});
   const [classFilter, setClassFilter] = useState("All classes");
@@ -33,16 +37,38 @@ export function AttendanceApp() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState("");
 
-  const refreshLocalState = useCallback(async () => {
+  const isToday = selectedDate === currentDate;
+
+  const refreshLocalState = useCallback(async (dateKey: string) => {
     const [cachedStudents, records] = await Promise.all([
       db.students.where("status").equals("Active").toArray(),
-      db.attendance.where("date").equals(today).toArray(),
+      db.attendance.where("date").equals(dateKey).toArray(),
     ]);
 
     setStudents(cachedStudents);
     setAttendance(Object.fromEntries(records.map((record) => [record.studentId, record])));
     setPendingCount(await db.attendance.filter((record) => !record.synced).count());
-  }, [today]);
+  }, []);
+
+  const cacheRemoteAttendance = useCallback(async (
+    dateKey: string,
+    remoteRecords: AttendanceRecord[],
+  ) => {
+    await db.transaction("rw", db.attendance, async () => {
+      const existing = await db.attendance.where("date").equals(dateKey).toArray();
+      const syncedIds = existing.filter((record) => record.synced).map((record) => record.id);
+
+      if (syncedIds.length) {
+        await db.attendance.bulkDelete(syncedIds);
+      }
+
+      if (remoteRecords.length) {
+        await db.attendance.bulkPut(
+          remoteRecords.map((record) => ({ ...record, synced: true })),
+        );
+      }
+    });
+  }, []);
 
   const endSession = useCallback(() => {
     clearStaffSession();
@@ -71,17 +97,20 @@ export function AttendanceApp() {
       }
 
       setDataMode("google-sheets");
-      await refreshLocalState();
+      await refreshLocalState(selectedDate);
     } catch (error) {
       if (isAuthError(error)) endSession();
       // Other failures stay queued in IndexedDB for the next sync attempt.
     }
-  }, [endSession, refreshLocalState]);
+  }, [endSession, refreshLocalState, selectedDate]);
 
-  const loadStudents = useCallback(async (activeSession: StaffSession) => {
+  const loadViewData = useCallback(async (
+    activeSession: StaffSession,
+    dateKey: string,
+  ) => {
     if (!isSheetsConfigured()) {
       setDataMode("setup");
-      await refreshLocalState();
+      await refreshLocalState(dateKey);
       return;
     }
 
@@ -91,6 +120,9 @@ export function AttendanceApp() {
         await db.students.clear();
         await db.students.bulkPut(sheetStudents);
       });
+
+      const sheetAttendance = await fetchAttendanceFromSheets(dateKey, activeSession.token);
+      await cacheRemoteAttendance(dateKey, sheetAttendance);
       setDataMode("google-sheets");
     } catch (error) {
       if (isAuthError(error)) {
@@ -100,8 +132,8 @@ export function AttendanceApp() {
       setDataMode("offline");
     }
 
-    await refreshLocalState();
-  }, [endSession, refreshLocalState]);
+    await refreshLocalState(dateKey);
+  }, [cacheRemoteAttendance, endSession, refreshLocalState]);
 
   useEffect(() => {
     setOnline(navigator.onLine);
@@ -119,9 +151,36 @@ export function AttendanceApp() {
   }, []);
 
   useEffect(() => {
+    const checkSchoolDate = () => {
+      const nextDate = getSchoolDateKey();
+      const previousDate = currentDateRef.current;
+      if (nextDate === previousDate) return;
+
+      currentDateRef.current = nextDate;
+      setCurrentDate(nextDate);
+      setSelectedDate((activeDate) => activeDate === previousDate ? nextDate : activeDate);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") checkSchoolDate();
+    };
+
+    checkSchoolDate();
+    const timer = window.setInterval(checkSchoolDate, 60_000);
+    window.addEventListener("focus", checkSchoolDate);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", checkSchoolDate);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!authReady || !session) return;
-    void loadStudents(session).then(() => syncPending(session));
-  }, [authReady, session, loadStudents, syncPending, online]);
+    void loadViewData(session, selectedDate).then(() => syncPending(session));
+  }, [authReady, session, loadViewData, syncPending, online, selectedDate]);
 
   useEffect(() => {
     if (!session) return;
@@ -151,6 +210,7 @@ export function AttendanceApp() {
       const nextSession = await loginStaff(username, pin);
       saveStaffSession(nextSession);
       setSession(nextSession);
+      setSelectedDate(getSchoolDateKey());
       event.currentTarget.reset();
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : "Could not sign in.");
@@ -166,9 +226,9 @@ export function AttendanceApp() {
   }
 
   async function updateAttendance(student: Student, action: "ARRIVE" | "LEAVE") {
-    if (!session) return;
+    if (!session || !isToday) return;
 
-    const id = recordId(today, student.id);
+    const id = recordId(currentDate, student.id);
     const existing = await db.attendance.get(id);
     const timestamp = new Date().toISOString();
 
@@ -177,7 +237,7 @@ export function AttendanceApp() {
       studentId: student.id,
       studentName: student.name,
       className: student.className,
-      date: today,
+      date: currentDate,
       arrivalAt: action === "ARRIVE" ? existing?.arrivalAt || timestamp : existing?.arrivalAt,
       departureAt: action === "LEAVE" ? timestamp : existing?.departureAt,
       updatedAt: timestamp,
@@ -185,18 +245,35 @@ export function AttendanceApp() {
     };
 
     await db.attendance.put(next);
-    await refreshLocalState();
+    await refreshLocalState(selectedDate);
     void syncPending(session);
   }
 
+  const viewStudents = useMemo(() => {
+    if (isToday) return students;
+
+    const byId = new Map(students.map((student) => [student.id, student]));
+    for (const record of Object.values(attendance)) {
+      if (!byId.has(record.studentId)) {
+        byId.set(record.studentId, {
+          id: record.studentId,
+          name: record.studentName,
+          className: record.className,
+          status: "Active",
+        });
+      }
+    }
+    return Array.from(byId.values());
+  }, [attendance, isToday, students]);
+
   const classes = useMemo(
-    () => ["All classes", ...Array.from(new Set(students.map((student) => student.className))).sort()],
-    [students],
+    () => ["All classes", ...Array.from(new Set(viewStudents.map((student) => student.className))).sort()],
+    [viewStudents],
   );
 
   const visibleStudents = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return students.filter((student) => {
+    return viewStudents.filter((student) => {
       const matchesClass = classFilter === "All classes" || student.className === classFilter;
       const matchesQuery =
         !normalizedQuery ||
@@ -204,19 +281,19 @@ export function AttendanceApp() {
         student.id.toLowerCase().includes(normalizedQuery);
       return matchesClass && matchesQuery;
     });
-  }, [students, classFilter, query]);
+  }, [viewStudents, classFilter, query]);
 
   const stats = useMemo(() => {
     const records = Object.values(attendance);
     const arrived = records.filter((record) => record.arrivalAt).length;
     const left = records.filter((record) => record.departureAt).length;
     return {
-      total: students.length,
+      total: viewStudents.length,
       arrived,
       left,
       inSchool: Math.max(arrived - left, 0),
     };
-  }, [attendance, students.length]);
+  }, [attendance, viewStudents.length]);
 
   if (!authReady) {
     return <main className="auth-shell"><div className="auth-card">Loading attendance…</div></main>;
@@ -267,19 +344,33 @@ export function AttendanceApp() {
       <section className="hero">
         <div>
           <p className="eyebrow">School attendance</p>
-          <h1>Today&apos;s check-in</h1>
-          <p className="date">{formatSchoolDate(today)}</p>
+          <h1>{isToday ? "Today's check-in" : "Attendance history"}</h1>
+          <p className="date">{formatSchoolDate(selectedDate)}</p>
         </div>
         <div className="status-stack">
           <span className={`pill ${online ? "online" : "offline"}`}>{online ? "Online" : "Offline"}</span>
           <span className="pill neutral">{sourceLabel}</span>
+          {!isToday && <span className="pill history">Read-only history</span>}
         </div>
+      </section>
+
+      <section className="history-bar" aria-label="Attendance date">
+        <label>
+          <span>Attendance date</span>
+          <input
+            type="date"
+            value={selectedDate}
+            max={currentDate}
+            onChange={(event) => setSelectedDate(event.target.value || currentDate)}
+          />
+        </label>
+        {!isToday && <button onClick={() => setSelectedDate(currentDate)}>Back to today</button>}
       </section>
 
       <section className="stats" aria-label="Attendance summary">
         <article><strong>{stats.total}</strong><span>Students</span></article>
         <article><strong>{stats.arrived}</strong><span>Arrived</span></article>
-        <article><strong>{stats.inSchool}</strong><span>In school</span></article>
+        <article><strong>{stats.inSchool}</strong><span>{isToday ? "In school" : "No departure"}</span></article>
         <article><strong>{stats.left}</strong><span>Left</span></article>
       </section>
 
@@ -287,6 +378,12 @@ export function AttendanceApp() {
         <div className="sync-banner">
           <strong>{pendingCount} record{pendingCount === 1 ? "" : "s"} waiting to sync.</strong>
           <span>{online ? " Sync will retry automatically." : " They are saved safely on this device."}</span>
+        </div>
+      )}
+
+      {!isToday && (
+        <div className="history-banner">
+          Viewing {formatSchoolDate(selectedDate)}. Historical attendance is read-only.
         </div>
       )}
 
@@ -323,9 +420,11 @@ export function AttendanceApp() {
                 </div>
               </div>
               <div className="actions">
-                {!hasArrived && <button className="primary" onClick={() => updateAttendance(student, "ARRIVE")}>Arrived</button>}
-                {hasArrived && !hasLeft && <button className="secondary" onClick={() => updateAttendance(student, "LEAVE")}>Mark left</button>}
+                {isToday && !hasArrived && <button className="primary" onClick={() => updateAttendance(student, "ARRIVE")}>Arrived</button>}
+                {isToday && hasArrived && !hasLeft && <button className="secondary" onClick={() => updateAttendance(student, "LEAVE")}>Mark left</button>}
                 {hasArrived && hasLeft && <span className="complete">Complete</span>}
+                {!isToday && hasArrived && !hasLeft && <span className="history-status">Arrived only</span>}
+                {!isToday && !hasArrived && <span className="history-status muted">Not marked</span>}
               </div>
             </article>
           );

@@ -83,6 +83,31 @@ export async function fetchStudentsFromSheets(token: string): Promise<Student[]>
   return payload.students ?? [];
 }
 
+export async function fetchAttendanceFromSheets(
+  date: string,
+  token: string,
+): Promise<AttendanceRecord[]> {
+  const endpoint = getEndpoint();
+  if (!endpoint) throw new Error("Google Apps Script URL is not configured");
+
+  const url = new URL(endpoint);
+  url.searchParams.set("action", "attendance");
+  url.searchParams.set("date", date);
+  url.searchParams.set("token", token);
+
+  const response = await fetch(url.toString(), { cache: "no-store" });
+  const payload = await parseJson(response) as {
+    ok?: boolean;
+    error?: string;
+    attendance?: AttendanceRecord[];
+  };
+
+  if (payload.error === "unauthorized") throw new AuthError();
+  if (!payload.ok) throw new Error(payload.error || "Could not load attendance from Google Sheets");
+
+  return (payload.attendance ?? []).map((record) => ({ ...record, synced: true }));
+}
+
 export async function syncAttendanceToSheets(
   records: AttendanceRecord[],
   token: string,
