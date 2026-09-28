@@ -24,6 +24,19 @@ async function parseJson(response: Response) {
   return response.json() as Promise<Record<string, unknown>>;
 }
 
+function normalizeStudent(student: Student): Student {
+  return {
+    ...student,
+    id: String(student.id || "").trim(),
+    name: String(student.name || "").trim(),
+    className: String(student.className || "").trim(),
+    status:
+      String(student.status || "Active").trim().toLowerCase() === "inactive"
+        ? "Inactive"
+        : "Active",
+  };
+}
+
 export async function loginStaff(username: string, pin: string): Promise<StaffSession> {
   const endpoint = getEndpoint();
   if (!endpoint) throw new Error("Google Apps Script URL is not configured");
@@ -80,7 +93,9 @@ export async function fetchStudentsFromSheets(token: string): Promise<Student[]>
   if (payload.error === "unauthorized") throw new AuthError();
   if (!payload.ok) throw new Error(payload.error || "Could not load students from Google Sheets");
 
-  return payload.students ?? [];
+  return (payload.students ?? [])
+    .map(normalizeStudent)
+    .filter((student) => student.id && student.status === "Active");
 }
 
 export async function fetchAttendanceFromSheets(
