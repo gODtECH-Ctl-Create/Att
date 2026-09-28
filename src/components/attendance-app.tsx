@@ -16,6 +16,8 @@ import {
 import { formatSchoolDate, formatSchoolTime, getSchoolDateKey } from "@/lib/time";
 import type { AttendanceRecord, StaffSession, Student } from "@/lib/types";
 
+const ALL_STUDENTS = "All students";
+
 function recordId(date: string, studentId: string) {
   return `${date}:${studentId}`;
 }
@@ -27,7 +29,7 @@ export function AttendanceApp() {
   const [selectedDate, setSelectedDate] = useState(initialDate);
   const [students, setStudents] = useState<Student[]>([]);
   const [attendance, setAttendance] = useState<Record<string, AttendanceRecord>>({});
-  const [classFilter, setClassFilter] = useState("All classes");
+  const [classFilter, setClassFilter] = useState(ALL_STUDENTS);
   const [query, setQuery] = useState("");
   const [online, setOnline] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
@@ -76,6 +78,8 @@ export function AttendanceApp() {
     setStudents([]);
     setAttendance({});
     setPendingCount(0);
+    setClassFilter(ALL_STUDENTS);
+    setQuery("");
     setLoginError("");
     setDataMode("offline");
   }, []);
@@ -100,7 +104,6 @@ export function AttendanceApp() {
       await refreshLocalState(selectedDate);
     } catch (error) {
       if (isAuthError(error)) endSession();
-      // Other failures stay queued in IndexedDB for the next sync attempt.
     }
   }, [endSession, refreshLocalState, selectedDate]);
 
@@ -144,6 +147,7 @@ export function AttendanceApp() {
     const handleOffline = () => setOnline(false);
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
@@ -176,6 +180,11 @@ export function AttendanceApp() {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, []);
+
+  useEffect(() => {
+    setClassFilter(ALL_STUDENTS);
+    setQuery("");
+  }, [selectedDate]);
 
   useEffect(() => {
     if (!authReady || !session) return;
@@ -211,6 +220,8 @@ export function AttendanceApp() {
       saveStaffSession(nextSession);
       setSession(nextSession);
       setSelectedDate(getSchoolDateKey());
+      setClassFilter(ALL_STUDENTS);
+      setQuery("");
       event.currentTarget.reset();
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : "Could not sign in.");
@@ -267,14 +278,20 @@ export function AttendanceApp() {
   }, [attendance, isToday, students]);
 
   const classes = useMemo(
-    () => ["All classes", ...Array.from(new Set(viewStudents.map((student) => student.className))).sort()],
+    () => [ALL_STUDENTS, ...Array.from(new Set(viewStudents.map((student) => student.className))).sort()],
     [viewStudents],
   );
+
+  useEffect(() => {
+    if (classFilter !== ALL_STUDENTS && !classes.includes(classFilter)) {
+      setClassFilter(ALL_STUDENTS);
+    }
+  }, [classes, classFilter]);
 
   const visibleStudents = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return viewStudents.filter((student) => {
-      const matchesClass = classFilter === "All classes" || student.className === classFilter;
+      const matchesClass = classFilter === ALL_STUDENTS || student.className === classFilter;
       const matchesQuery =
         !normalizedQuery ||
         student.name.toLowerCase().includes(normalizedQuery) ||
@@ -389,7 +406,7 @@ export function AttendanceApp() {
 
       <section className="controls">
         <label>
-          <span>Class</span>
+          <span>Class filter</span>
           <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
             {classes.map((className) => <option key={className}>{className}</option>)}
           </select>
