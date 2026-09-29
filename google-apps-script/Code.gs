@@ -116,7 +116,6 @@ function setupAttendanceWorkbook() {
     "Status",
   ]);
 
-  addAdminMenu_();
 }
 
 function onOpen() {
