@@ -1,10 +1,23 @@
-const CACHE_NAME = "att-shell-v3";
+const CACHE_NAME = "att-shell-v4";
 const BASE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
 const APP_SHELL = [
   `${BASE_PATH}/`,
   `${BASE_PATH}/manifest.webmanifest`,
   `${BASE_PATH}/icon.svg`,
 ];
+
+async function updateShell(request, cached) {
+  try {
+    const response = await fetch(request);
+    if (response.ok) {
+      const copy = response.clone();
+      await caches.open(CACHE_NAME).then((cache) => cache.put(`${BASE_PATH}/`, copy));
+    }
+    return response;
+  } catch {
+    return cached;
+  }
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -34,15 +47,15 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request, { cache: "no-store" })
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(`${BASE_PATH}/`, copy)));
-          }
-          return response;
-        })
-        .catch(() => caches.match(`${BASE_PATH}/`)),
+      caches.match(`${BASE_PATH}/`).then((cached) => {
+        const network = updateShell(request, cached);
+        if (cached) {
+          // Return the cached app shell immediately while refreshing it in the background.
+          event.waitUntil(network.then(() => undefined));
+          return cached;
+        }
+        return network;
+      }),
     );
     return;
   }
