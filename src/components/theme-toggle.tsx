@@ -14,6 +14,8 @@ export function useTheme() {
 
     document.documentElement.dataset.theme = nextDark ? "dark" : "light";
     document.documentElement.style.colorScheme = nextDark ? "dark" : "light";
+    const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (themeColor) themeColor.content = nextDark ? "#0b1220" : "#f4f7fb";
     setDark(nextDark);
   }, []);
 
