@@ -15,11 +15,11 @@ const PENDING_STAFF_HOURS = 48;
 const STAFF_HEADERS = [
   "Username",
   "Name",
-  "PIN Hash",
+  "Password Hash",
   "Salt",
   "Role",
   "Status",
-  "Must Change PIN",
+  "Must Change Password",
 ];
 
 function doGet(e) {
@@ -509,6 +509,8 @@ function registerStaff_(username, name, password) {
     sheet.appendRow(rowValues);
   }
 
+  deletePendingTokensForUsername_(username);
+
   PropertiesService.getScriptProperties().setProperty(
     PENDING_STAFF_PREFIX + registrationToken,
     JSON.stringify({
@@ -564,7 +566,7 @@ function checkRegistrationApproval_(registrationToken) {
   }
 
   if (status === "rejected") {
-    properties.deleteProperty(key);
+    deletePendingTokensForUsername_(pending.username);
     return {
       ok: true,
       status: "rejected",
@@ -580,7 +582,7 @@ function checkRegistrationApproval_(registrationToken) {
     };
   }
 
-  properties.deleteProperty(key);
+  deletePendingTokensForUsername_(pending.username);
 
   return {
     ok: true,
@@ -701,6 +703,26 @@ function countActiveAdmins_() {
     return staff.role.toLowerCase() === "admin" &&
       staff.status.toLowerCase() !== "inactive";
   }).length;
+}
+
+function deletePendingTokensForUsername_(username) {
+  username = String(username || "").trim().toLowerCase();
+
+  const properties = PropertiesService.getScriptProperties();
+  const values = properties.getProperties();
+
+  Object.keys(values).forEach(function (key) {
+    if (key.indexOf(PENDING_STAFF_PREFIX) !== 0) return;
+
+    try {
+      const pending = JSON.parse(values[key]);
+      if (String(pending.username || "").trim().toLowerCase() === username) {
+        properties.deleteProperty(key);
+      }
+    } catch (error) {
+      properties.deleteProperty(key);
+    }
+  });
 }
 
 function revokeSessionsForUsername_(username) {
