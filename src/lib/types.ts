@@ -30,4 +30,5 @@ export type StaffSession = {
   name: string;
   role: string;
   expiresAt: string;
+  mustChangePin?: boolean;
 };
