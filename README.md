@@ -62,18 +62,47 @@ One student gets one attendance row per day. Pressing **Arrived** writes the arr
 
 Plain PINs are never stored in the sheet. Apps Script stores a salted SHA-256 hash.
 
-## Create the first staff account
+## Staff account flow
 
-After running `setupAttendanceWorkbook`:
+Staff accounts are created from the ATT application.
 
-1. Reload the Google Sheet.
-2. Open **Attendance Admin → Add staff account** from the sheet menu.
-3. Enter a unique username.
-4. Enter the staff member's display name.
-5. Enter a PIN with at least 6 characters.
-6. Enter `Admin` or `Staff` as the role.
+```text
+Staff
+  │
+  ├── Create account
+  │      ├── Username
+  │      ├── Full name
+  │      ├── Password
+  │      └── Confirm password
+  │
+  ▼
+Awaiting admin approval
+  │
+  ▼
+Admin opens Staff from the ATT app
+  │
+  ├── Approve
+  └── Reject
+  │
+  ▼
+Staff is admitted to ATT
+```
 
-The app limits repeated failed sign-in attempts and issues a 12-hour session after a successful login.
+The registration request is stored as `Pending` in the `Staff` sheet. Passwords are stored only as salted SHA-256 hashes.
+
+A pending device keeps a short-lived registration token locally. ATT checks the approval status automatically, so once an administrator approves the request, the staff member is signed in automatically. Closing and reopening the app also resumes the pending registration and checks for approval.
+
+Approved staff can open **Account → Change password** to update their own password. Admins can open **Staff** to approve or reject requests and enable or disable existing staff accounts.
+
+The school still needs at least one active administrator account to approve new staff. Keep that bootstrap admin account active.
+
+`Staff` columns:
+
+| Username | Name | Password Hash | Salt | Role | Status | Must Change Password |
+|---|---|---|---|---|---|---|
+| frontdesk | Mary James | salted hash | random salt | Staff | Active | FALSE |
+
+`Status` can be `Pending`, `Active`, `Inactive`, or `Rejected`.
 
 ## Update the Apps Script deployment
 
