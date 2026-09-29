@@ -123,6 +123,31 @@ export async function fetchAttendanceFromSheets(
   return (payload.attendance ?? []).map((record) => ({ ...record, synced: true }));
 }
 
+export async function fetchAttendanceVersionFromSheets(
+  date: string,
+  token: string,
+): Promise<string> {
+  const endpoint = getEndpoint();
+  if (!endpoint) throw new Error("Google Apps Script URL is not configured");
+
+  const url = new URL(endpoint);
+  url.searchParams.set("action", "attendanceVersion");
+  url.searchParams.set("date", date);
+  url.searchParams.set("token", token);
+
+  const response = await fetch(url.toString(), { cache: "no-store" });
+  const payload = await parseJson(response) as {
+    ok?: boolean;
+    error?: string;
+    version?: string | number;
+  };
+
+  if (payload.error === "unauthorized") throw new AuthError();
+  if (!payload.ok) throw new Error(payload.error || "Could not check attendance updates");
+
+  return String(payload.version ?? "0");
+}
+
 export async function syncAttendanceToSheets(
   records: AttendanceRecord[],
   token: string,

@@ -6,6 +6,7 @@ import { clearStaffSession, getStoredStaffSession, saveStaffSession } from "@/li
 import { db } from "@/lib/db";
 import {
   fetchAttendanceFromSheets,
+  fetchAttendanceVersionFromSheets,
   fetchStudentsFromSheets,
   isAuthError,
   isSheetsConfigured,
@@ -33,6 +34,8 @@ export function AttendanceApp() {
   const initialDate = useMemo(() => getSchoolDateKey(), []);
   const currentDateRef = useRef(initialDate);
   const loadVersionRef = useRef(0);
+  const attendanceVersionRef = useRef("0");
+  const pollBusyRef = useRef(false);
   const [currentDate, setCurrentDate] = useState(initialDate);
   const [selectedDate, setSelectedDate] = useState(initialDate);
   const [students, setStudents] = useState<Student[]>([]);
@@ -157,9 +160,10 @@ export function AttendanceApp() {
 
     try {
       // These requests are independent, so fetch them together to save a round trip.
-      const [sheetStudents, sheetAttendance] = await Promise.all([
+      const [sheetStudents, sheetAttendance, attendanceVersion] = await Promise.all([
         fetchStudentsFromSheets(activeSession.token),
         fetchAttendanceFromSheets(dateKey, activeSession.token),
+        fetchAttendanceVersionFromSheets(dateKey, activeSession.token),
       ]);
 
       if (loadVersion !== loadVersionRef.current) return;
@@ -175,6 +179,7 @@ export function AttendanceApp() {
 
       if (loadVersion !== loadVersionRef.current) return;
 
+      attendanceVersionRef.current = attendanceVersion;
       setDataMode("google-sheets");
       await refreshLocalState(dateKey);
     } catch (error) {
@@ -238,6 +243,60 @@ export function AttendanceApp() {
     if (!authReady || !session) return;
     void loadViewData(session, selectedDate).then(() => syncPending(session));
   }, [authReady, session, loadViewData, syncPending, online, selectedDate]);
+
+  const pollAttendance = useCallback(async (activeSession: StaffSession, dateKey: string) => {
+    if (
+      pollBusyRef.current ||
+      !navigator.onLine ||
+      !isSheetsConfigured() ||
+      document.visibilityState !== "visible"
+    ) {
+      return;
+    }
+
+    pollBusyRef.current = true;
+
+    try {
+      const nextVersion = await fetchAttendanceVersionFromSheets(dateKey, activeSession.token);
+
+      if (nextVersion === attendanceVersionRef.current) return;
+
+      const records = await fetchAttendanceFromSheets(dateKey, activeSession.token);
+      await cacheRemoteAttendance(dateKey, records);
+      attendanceVersionRef.current = nextVersion;
+      setDataMode("google-sheets");
+      await refreshLocalState(dateKey);
+    } catch (error) {
+      if (isAuthError(error)) {
+        endSession();
+      }
+    } finally {
+      pollBusyRef.current = false;
+    }
+  }, [cacheRemoteAttendance, endSession, refreshLocalState]);
+
+  useEffect(() => {
+    attendanceVersionRef.current = "0";
+    if (!session || !authReady) return;
+
+    const run = () => void pollAttendance(session, selectedDate);
+    run();
+
+    const timer = window.setInterval(run, 2500);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") run();
+    };
+
+    window.addEventListener("focus", run);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", run);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [authReady, pollAttendance, selectedDate, session]);
 
   useEffect(() => {
     if (!session) return;
