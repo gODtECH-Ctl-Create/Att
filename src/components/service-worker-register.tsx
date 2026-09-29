@@ -10,13 +10,19 @@ export function ServiceWorkerRegister() {
     const serviceWorkerUrl = `${basePath}/sw.js`;
     const scope = `${basePath}/`;
 
-    const register = () => {
-      navigator.serviceWorker.register(serviceWorkerUrl, { scope }).catch((error) => {
+    const register = async () => {
+      try {
+        const registration = await navigator.serviceWorker.register(serviceWorkerUrl, {
+          scope,
+          updateViaCache: "none",
+        });
+        await registration.update();
+      } catch (error) {
         console.error("Service worker registration failed", error);
-      });
+      }
     };
 
-    if (document.readyState === "complete") register();
+    if (document.readyState === "complete") void register();
     else window.addEventListener("load", register, { once: true });
   }, []);
 
