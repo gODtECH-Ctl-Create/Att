@@ -414,6 +414,12 @@ function setStaffStatusFromApp_(body) {
   }
 
   const target = findStaffRow_(username);
+  const targetRole = normalizeRole_(target.values[4]);
+
+  if (status === "Inactive" && targetRole === "Admin" && countActiveAdmins_() <= 1) {
+    return { ok: false, error: "At least one active admin account must remain." };
+  }
+
   target.sheet.getRange(target.rowNumber, 6).setValue(status);
 
   if (status === "Inactive") {
@@ -421,6 +427,13 @@ function setStaffStatusFromApp_(body) {
   }
 
   return { ok: true, username: username, status: status };
+}
+
+function countActiveAdmins_() {
+  return getStaffDirectory_().filter(function (staff) {
+    return staff.role === "Admin" &&
+      String(staff.status || "Active").trim().toLowerCase() !== "inactive";
+  }).length;
 }
 
 function revokeSessionsForUsername_(username) {
