@@ -554,7 +554,14 @@ function checkRegistrationApproval_(registrationToken) {
     return { ok: false, status: "expired" };
   }
 
-  const target = findStaffRow_(pending.username);
+  let target;
+  try {
+    target = findStaffRow_(pending.username);
+  } catch (error) {
+    properties.deleteProperty(key);
+    return { ok: false, status: "invalid" };
+  }
+
   const status = String(target.values[5] || "Pending").trim().toLowerCase();
 
   if (status === "pending") {
