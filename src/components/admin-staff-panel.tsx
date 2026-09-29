@@ -30,6 +30,23 @@ export function AdminStaffPanel({ token, username, onClose }: Props) {
 
   useEffect(() => {
     void load();
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 5000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+
+    window.addEventListener("focus", handleVisibility);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", handleVisibility);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [load]);
 
   const pending = useMemo(
