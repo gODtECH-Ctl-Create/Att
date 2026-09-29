@@ -2,7 +2,13 @@
 
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { clearStaffSession, getStoredStaffSession, saveStaffSession } from "@/lib/auth";
+import {
+  clearPendingRegistration,
+  clearStaffSession,
+  getPendingRegistration,
+  getStoredStaffSession,
+  saveStaffSession,
+} from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
   fetchAttendanceFromSheets,
@@ -16,7 +22,12 @@ import {
 } from "@/lib/sheets-client";
 import { formatSchoolDate, formatSchoolTime, getSchoolDateKey } from "@/lib/time";
 import { useTheme } from "@/components/theme-toggle";
+import { AdminStaffPanel } from "@/components/admin-staff-panel";
+import { ChangePasswordPanel } from "@/components/change-password-panel";
+import { PendingApproval } from "@/components/pending-approval";
+import { StaffRegistration } from "@/components/staff-registration";
 import type { AttendanceRecord, StaffSession, Student } from "@/lib/types";
+import type { PendingRegistration } from "@/lib/auth";
 
 const ALL_STUDENTS = "All students";
 
@@ -49,6 +60,10 @@ export function AttendanceApp() {
   const [authReady, setAuthReady] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [authView, setAuthView] = useState<"login" | "register">("login");
+  const [pendingRegistration, setPendingRegistration] = useState<PendingRegistration | null>(null);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const { dark, toggleTheme } = useTheme();
 
   const isToday = selectedDate === currentDate;
@@ -194,6 +209,7 @@ export function AttendanceApp() {
   useEffect(() => {
     setOnline(navigator.onLine);
     setSession(getStoredStaffSession());
+    setPendingRegistration(getPendingRegistration());
     setAuthReady(true);
 
     const handleOnline = () => setOnline(true);
@@ -318,13 +334,15 @@ export function AttendanceApp() {
 
     const form = new FormData(event.currentTarget);
     const username = String(form.get("username") || "").trim();
-    const pin = String(form.get("pin") || "");
+    const password = String(form.get("password") || "");
 
     setLoginBusy(true);
     setLoginError("");
     try {
-      const nextSession = await loginStaff(username, pin);
+      const nextSession = await loginStaff(username, password);
       saveStaffSession(nextSession);
+      clearPendingRegistration();
+      setPendingRegistration(null);
       setSession(nextSession);
       setSelectedDate(getSchoolDateKey());
       setClassFilter(ALL_STUDENTS);
@@ -424,6 +442,48 @@ export function AttendanceApp() {
   }
 
   if (!session) {
+    if (pendingRegistration) {
+      return (
+        <main className="auth-shell">
+          <PendingApproval
+            pending={pendingRegistration}
+            online={online}
+            onApproved={(nextSession) => {
+              saveStaffSession(nextSession);
+              setPendingRegistration(null);
+              setSession(nextSession);
+              setSelectedDate(getSchoolDateKey());
+            }}
+            onStartOver={() => {
+              clearPendingRegistration();
+              setPendingRegistration(null);
+              setAuthView("register");
+            }}
+          />
+        </main>
+      );
+    }
+
+    if (authView === "register") {
+      return (
+        <main className="auth-shell">
+          <div>
+            <div className="auth-theme-toggle">
+              <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}>
+                <span aria-hidden="true">{dark ? "☀" : "☾"}</span>
+                <span>{dark ? "Light" : "Dark"}</span>
+              </button>
+            </div>
+            <StaffRegistration
+              online={online}
+              onPending={setPendingRegistration}
+              onBackToLogin={() => setAuthView("login")}
+            />
+          </div>
+        </main>
+      );
+    }
+
     return (
       <main className="auth-shell">
         <section className="auth-card">
@@ -435,7 +495,7 @@ export function AttendanceApp() {
             </button>
           </div>
           <h1>Staff sign in</h1>
-          <p className="auth-copy">Sign in with the username and PIN created by the school administrator.</p>
+          <p className="auth-copy">Sign in with your approved staff username and password.</p>
           <span className={`pill ${online ? "online" : "offline"}`}>{online ? "Online" : "Offline"}</span>
 
           <form className="login-form" onSubmit={handleLogin}>
@@ -444,14 +504,25 @@ export function AttendanceApp() {
               <input name="username" autoComplete="username" required placeholder="e.g. frontdesk" />
             </label>
             <label>
-              <span>PIN</span>
-              <input name="pin" type="password" inputMode="numeric" autoComplete="current-password" required minLength={6} placeholder="••••••" />
+              <span>Password</span>
+              <input name="password" type="password" autoComplete="current-password" required minLength={6} placeholder="Your password" />
             </label>
             {loginError && <p className="auth-error">{loginError}</p>}
             <button className="login-button" disabled={loginBusy || !online}>
               {loginBusy ? "Signing in…" : "Sign in"}
             </button>
           </form>
+
+          <div className="auth-secondary">
+            <span>New staff member?</span>
+            <button className="auth-link" type="button" onClick={() => {
+              setLoginError("");
+              setAuthView("register");
+            }}>
+              Create an account
+            </button>
+          </div>
+
           {!online && <p className="auth-note">A first sign-in requires internet access.</p>}
         </section>
       </main>
@@ -469,6 +540,28 @@ export function AttendanceApp() {
       <section className="staff-bar">
         <div><span>Signed in as</span><strong>{session.name}</strong><small>{session.role}</small></div>
         <div className="staff-actions">
+          {session.role.toLowerCase() === "admin" && (
+            <button
+              className={showAdmin ? "active-tool" : ""}
+              type="button"
+              onClick={() => {
+                setShowAdmin((value) => !value);
+                setShowAccount(false);
+              }}
+            >
+              Staff
+            </button>
+          )}
+          <button
+            className={showAccount ? "active-tool" : ""}
+            type="button"
+            onClick={() => {
+              setShowAccount((value) => !value);
+              setShowAdmin(false);
+            }}
+          >
+            Account
+          </button>
           <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}>
             <span aria-hidden="true">{dark ? "☀" : "☾"}</span>
             <span>{dark ? "Light" : "Dark"}</span>
@@ -476,6 +569,19 @@ export function AttendanceApp() {
           <button onClick={handleLogout}>Sign out</button>
         </div>
       </section>
+      {showAdmin && session.role.toLowerCase() === "admin" && (
+        <AdminStaffPanel
+          token={session.token}
+          username={session.username}
+          onClose={() => setShowAdmin(false)}
+        />
+      )}
+      {showAccount && (
+        <ChangePasswordPanel
+          token={session.token}
+          onClose={() => setShowAccount(false)}
+        />
+      )}
 
       <section className="hero">
         <div>

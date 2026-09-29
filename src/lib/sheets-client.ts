@@ -37,6 +37,156 @@ function normalizeStudent(student: Student): Student {
   };
 }
 
+export type RegistrationResult = {
+  username: string;
+  name: string;
+  registrationToken: string;
+};
+
+export type ApprovalResult = {
+  status: "pending" | "approved" | "rejected" | "expired" | "invalid";
+  session?: StaffSession;
+  message?: string;
+};
+
+export type StaffDirectoryEntry = {
+  username: string;
+  name: string;
+  role: string;
+  status: string;
+  mustChangePin: boolean;
+};
+
+async function postJson<T>(body: Record<string, unknown>): Promise<T> {
+  const endpoint = getEndpoint();
+  if (!endpoint) throw new Error("Google Apps Script URL is not configured");
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+
+  return parseJson(response) as Promise<T>;
+}
+
+export async function registerStaff(
+  username: string,
+  name: string,
+  password: string,
+): Promise<RegistrationResult> {
+  const payload = await postJson<{
+    ok?: boolean;
+    error?: string;
+    status?: string;
+    registrationToken?: string;
+    username?: string;
+    name?: string;
+  }>({ action: "registerStaff", username, name, password });
+
+  if (!payload.ok || payload.status !== "pending" || !payload.registrationToken) {
+    throw new Error(payload.error || "Could not create your account.");
+  }
+
+  return {
+    username: String(payload.username || username),
+    name: String(payload.name || name),
+    registrationToken: payload.registrationToken,
+  };
+}
+
+export async function checkRegistrationApproval(
+  registrationToken: string,
+): Promise<ApprovalResult> {
+  const endpoint = getEndpoint();
+  if (!endpoint) throw new Error("Google Apps Script URL is not configured");
+
+  const url = new URL(endpoint);
+  url.searchParams.set("action", "approvalStatus");
+  url.searchParams.set("registrationToken", registrationToken);
+
+  const response = await fetch(url.toString(), { cache: "no-store" });
+  const payload = await parseJson(response) as {
+    ok?: boolean;
+    status?: ApprovalResult["status"];
+    message?: string;
+    session?: StaffSession;
+  };
+
+  return {
+    status: payload.status || "invalid",
+    message: payload.message,
+    session: payload.session,
+  };
+}
+
+export async function fetchStaffDirectory(token: string): Promise<StaffDirectoryEntry[]> {
+  const endpoint = getEndpoint();
+  if (!endpoint) throw new Error("Google Apps Script URL is not configured");
+
+  const url = new URL(endpoint);
+  url.searchParams.set("action", "staff");
+  url.searchParams.set("token", token);
+
+  const response = await fetch(url.toString(), { cache: "no-store" });
+  const payload = await parseJson(response) as {
+    ok?: boolean;
+    error?: string;
+    staff?: StaffDirectoryEntry[];
+  };
+
+  if (payload.error === "unauthorized") throw new AuthError();
+  if (payload.error === "forbidden") throw new Error("Admin access is required.");
+  if (!payload.ok) throw new Error(payload.error || "Could not load staff accounts.");
+
+  return payload.staff ?? [];
+}
+
+export async function updateStaffApproval(
+  token: string,
+  action: "approveStaff" | "rejectStaff",
+  username: string,
+) {
+  const payload = await postJson<{ ok?: boolean; error?: string; status?: string }>({
+    action,
+    token,
+    username,
+  });
+
+  if (!payload.ok) throw new Error(payload.error || "Could not update staff request.");
+}
+
+export async function updateStaffStatus(
+  token: string,
+  username: string,
+  status: "Active" | "Inactive",
+) {
+  const payload = await postJson<{ ok?: boolean; error?: string }>({
+    action: "setStaffStatus",
+    token,
+    username,
+    status,
+  });
+
+  if (!payload.ok) throw new Error(payload.error || "Could not update staff status.");
+}
+
+export async function changeOwnPassword(
+  token: string,
+  currentPassword: string,
+  newPassword: string,
+) {
+  const payload = await postJson<{ ok?: boolean; error?: string }>({
+    action: "changePassword",
+    token,
+    currentPassword,
+    newPassword,
+  });
+
+  if (payload.error === "unauthorized") throw new AuthError();
+  if (!payload.ok) throw new Error(payload.error || "Could not change password.");
+}
+
 export async function loginStaff(username: string, pin: string): Promise<StaffSession> {
   const endpoint = getEndpoint();
   if (!endpoint) throw new Error("Google Apps Script URL is not configured");

@@ -28,3 +28,38 @@ export function saveStaffSession(session: StaffSession) {
 export function clearStaffSession() {
   if (typeof window !== "undefined") window.localStorage.removeItem(STORAGE_KEY);
 }
+
+
+export type PendingRegistration = {
+  username: string;
+  name: string;
+  registrationToken: string;
+};
+
+const PENDING_REGISTRATION_KEY = "att-pending-registration-v1";
+
+export function getPendingRegistration(): PendingRegistration | null {
+  if (typeof window === "undefined") return null;
+
+  const raw = window.localStorage.getItem(PENDING_REGISTRATION_KEY);
+  if (!raw) return null;
+
+  try {
+    const pending = JSON.parse(raw) as PendingRegistration;
+    if (!pending.username || !pending.name || !pending.registrationToken) return null;
+    return pending;
+  } catch {
+    window.localStorage.removeItem(PENDING_REGISTRATION_KEY);
+    return null;
+  }
+}
+
+export function savePendingRegistration(pending: PendingRegistration) {
+  window.localStorage.setItem(PENDING_REGISTRATION_KEY, JSON.stringify(pending));
+}
+
+export function clearPendingRegistration() {
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem(PENDING_REGISTRATION_KEY);
+  }
+}
