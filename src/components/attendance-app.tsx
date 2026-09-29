@@ -22,9 +22,16 @@ function recordId(date: string, studentId: string) {
   return `${date}:${studentId}`;
 }
 
+type LocalState = {
+  students: Student[];
+  attendance: Record<string, AttendanceRecord>;
+  pendingCount: number;
+};
+
 export function AttendanceApp() {
   const initialDate = useMemo(() => getSchoolDateKey(), []);
   const currentDateRef = useRef(initialDate);
+  const loadVersionRef = useRef(0);
   const [currentDate, setCurrentDate] = useState(initialDate);
   const [selectedDate, setSelectedDate] = useState(initialDate);
   const [students, setStudents] = useState<Student[]>([]);
@@ -41,16 +48,29 @@ export function AttendanceApp() {
 
   const isToday = selectedDate === currentDate;
 
-  const refreshLocalState = useCallback(async (dateKey: string) => {
-    const [cachedStudents, records] = await Promise.all([
+  const readLocalState = useCallback(async (dateKey: string): Promise<LocalState> => {
+    const [cachedStudents, records, pending] = await Promise.all([
       db.students.where("status").equals("Active").toArray(),
       db.attendance.where("date").equals(dateKey).toArray(),
+      db.attendance.filter((record) => !record.synced).count(),
     ]);
 
-    setStudents(cachedStudents);
-    setAttendance(Object.fromEntries(records.map((record) => [record.studentId, record])));
-    setPendingCount(await db.attendance.filter((record) => !record.synced).count());
+    return {
+      students: cachedStudents,
+      attendance: Object.fromEntries(records.map((record) => [record.studentId, record])),
+      pendingCount: pending,
+    };
   }, []);
+
+  const applyLocalState = useCallback((localState: LocalState) => {
+    setStudents(localState.students);
+    setAttendance(localState.attendance);
+    setPendingCount(localState.pendingCount);
+  }, []);
+
+  const refreshLocalState = useCallback(async (dateKey: string) => {
+    applyLocalState(await readLocalState(dateKey));
+  }, [applyLocalState, readLocalState]);
 
   const cacheRemoteAttendance = useCallback(async (
     dateKey: string,
@@ -93,11 +113,16 @@ export function AttendanceApp() {
     try {
       const result = await syncAttendanceToSheets(pending, activeSession.token);
       if (result.syncedIds.length) {
-        await db.transaction("rw", db.attendance, async () => {
-          for (const id of result.syncedIds) {
-            await db.attendance.update(id, { synced: true });
-          }
-        });
+        const syncedIdSet = new Set(result.syncedIds);
+        const syncedRecords = pending
+          .filter((record) => syncedIdSet.has(record.id))
+          .map((record) => ({ ...record, synced: true }));
+
+        if (syncedRecords.length) {
+          await db.transaction("rw", db.attendance, async () => {
+            await db.attendance.bulkPut(syncedRecords);
+          });
+        }
       }
 
       setDataMode("google-sheets");
@@ -111,22 +136,45 @@ export function AttendanceApp() {
     activeSession: StaffSession,
     dateKey: string,
   ) => {
+    const loadVersion = ++loadVersionRef.current;
+
+    // Render the local cache first. The network should revalidate it, not block it.
+    const localState = await readLocalState(dateKey);
+    if (loadVersion !== loadVersionRef.current) return;
+    applyLocalState(localState);
+
     if (!isSheetsConfigured()) {
       setDataMode("setup");
-      await refreshLocalState(dateKey);
+      return;
+    }
+
+    if (!navigator.onLine) {
+      setDataMode("offline");
       return;
     }
 
     try {
-      const sheetStudents = await fetchStudentsFromSheets(activeSession.token);
-      await db.transaction("rw", db.students, async () => {
+      // These requests are independent, so fetch them together to save a round trip.
+      const [sheetStudents, sheetAttendance] = await Promise.all([
+        fetchStudentsFromSheets(activeSession.token),
+        fetchAttendanceFromSheets(dateKey, activeSession.token),
+      ]);
+
+      if (loadVersion !== loadVersionRef.current) return;
+
+      await db.transaction("rw", db.students, db.attendance, async () => {
         await db.students.clear();
-        await db.students.bulkPut(sheetStudents);
+        if (sheetStudents.length) {
+          await db.students.bulkPut(sheetStudents);
+        }
       });
 
-      const sheetAttendance = await fetchAttendanceFromSheets(dateKey, activeSession.token);
       await cacheRemoteAttendance(dateKey, sheetAttendance);
+
+      if (loadVersion !== loadVersionRef.current) return;
+
       setDataMode("google-sheets");
+      await refreshLocalState(dateKey);
     } catch (error) {
       if (isAuthError(error)) {
         endSession();
@@ -134,9 +182,7 @@ export function AttendanceApp() {
       }
       setDataMode("offline");
     }
-
-    await refreshLocalState(dateKey);
-  }, [cacheRemoteAttendance, endSession, refreshLocalState]);
+  }, [applyLocalState, cacheRemoteAttendance, endSession, readLocalState, refreshLocalState]);
 
   useEffect(() => {
     setOnline(navigator.onLine);
