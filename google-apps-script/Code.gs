@@ -7,6 +7,7 @@ const SESSION_HOURS = 12;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_SECONDS = 600;
 const ATTENDANCE_VERSION_PREFIX = "attendance_version_";
+const STAFF_HEADERS = ["Username", "Name", "PIN Hash", "Salt", "Role", "Status", "Must Change PIN"];
 
 function doGet(e) {
   const params = (e && e.parameter) || {};
@@ -39,6 +40,14 @@ function doGet(e) {
     });
   }
 
+  if (action === "staff") {
+    const session = getSession_(params.token || "");
+    if (!session) return jsonResponse({ ok: false, error: "unauthorized" });
+    if (!isAdminSession_(session)) return jsonResponse({ ok: false, error: "forbidden" });
+
+    return jsonResponse({ ok: true, staff: getStaffDirectory_() });
+  }
+
   if (action === "attendanceVersion") {
     const session = getSession_(params.token || "");
     if (!session) return jsonResponse({ ok: false, error: "unauthorized" });
@@ -68,6 +77,22 @@ function doPost(e) {
     if (body.action === "logout") {
       logoutStaff_(body.token);
       return jsonResponse({ ok: true });
+    }
+
+    if (body.action === "createStaff") {
+      return jsonResponse(createStaffFromApp_(body));
+    }
+
+    if (body.action === "setStaffStatus") {
+      return jsonResponse(setStaffStatusFromApp_(body));
+    }
+
+    if (body.action === "resetStaffPin") {
+      return jsonResponse(resetStaffPinFromApp_(body));
+    }
+
+    if (body.action === "changePin") {
+      return jsonResponse(changeOwnPin_(body));
     }
 
     if (body.action === "syncAttendance" && Array.isArray(body.records)) {
@@ -107,16 +132,8 @@ function setupAttendanceWorkbook() {
     "Updated By",
   ]);
 
-  ensureHeaders_(getOrCreateSheet_(spreadsheet, STAFF_SHEET), [
-    "Username",
-    "Name",
-    "PIN Hash",
-    "Salt",
-    "Role",
-    "Status",
-  ]);
+  ensureHeaders_(getOrCreateSheet_(spreadsheet, STAFF_SHEET), STAFF_HEADERS);
 
-  addAdminMenu_();
 }
 
 function onOpen() {
@@ -126,8 +143,22 @@ function onOpen() {
 function addAdminMenu_() {
   SpreadsheetApp.getUi()
     .createMenu("Attendance Admin")
-    .addItem("Add staff account", "createStaffAccountFromPrompt")
+    .addItem("Open attendance app", "openAttendanceApp_")
     .addToUi();
+}
+
+function openAttendanceApp_() {
+  const url = ScriptApp.getService().getUrl();
+  if (!url) {
+    SpreadsheetApp.getUi().alert("Deploy the Apps Script as a web app first.");
+    return;
+  }
+  SpreadsheetApp.getUi().showModalDialog(
+    HtmlService.createHtmlOutput(
+      '<script>window.open(' + JSON.stringify(url) + ', "_blank");google.script.host.close();</script>',
+    ).setWidth(1).setHeight(1),
+    "Opening Att",
+  );
 }
 
 function createStaffAccountFromPrompt() {
@@ -176,7 +207,7 @@ function addStaffAccount_(username, name, pin, role) {
 
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet.getSheetByName(STAFF_SHEET) || getOrCreateSheet_(spreadsheet, STAFF_SHEET);
-  ensureHeaders_(sheet, ["Username", "Name", "PIN Hash", "Salt", "Role", "Status"]);
+  ensureHeaders_(sheet, STAFF_HEADERS);
 
   if (sheet.getLastRow() > 1) {
     const existing = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
@@ -186,7 +217,7 @@ function addStaffAccount_(username, name, pin, role) {
   }
 
   const salt = Utilities.getUuid().replace(/-/g, "");
-  sheet.appendRow([username, name, hashPin_(pin, salt), salt, role, "Active"]);
+  sheet.appendRow([username, name, hashPin_(pin, salt), salt, role, "Active", "TRUE"]);
 }
 
 function loginStaff_(username, pin) {
@@ -208,7 +239,8 @@ function loginStaff_(username, pin) {
     return { ok: false, error: "No staff accounts have been configured yet." };
   }
 
-  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues();
+  const columnCount = Math.max(sheet.getLastColumn(), 7);
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, columnCount).getValues();
   const row = rows.find(function (item) {
     return String(item[0]).trim().toLowerCase() === username;
   });
@@ -233,6 +265,7 @@ function loginStaff_(username, pin) {
     name: String(row[1] || username),
     role: String(row[4] || "Staff"),
     expiresAt: new Date(expiresAtMs).toISOString(),
+    mustChangePin: parseBoolean_(row[6]),
   };
 
   PropertiesService.getScriptProperties().setProperty(
@@ -271,12 +304,190 @@ function getSession_(token) {
   }
 }
 
+function isAdminSession_(session) {
+  return String(session && session.role || "").trim().toLowerCase() === "admin";
+}
+
+function parseBoolean_(value) {
+  if (typeof value === "boolean") return value;
+  return ["true", "yes", "1"].includes(String(value || "").trim().toLowerCase());
+}
+
+function generateDefaultPin_() {
+  const uuid = Utilities.getUuid().replace(/-/g, "");
+  let pin = "";
+  for (let i = 0; i < uuid.length && pin.length < 6; i += 1) {
+    const code = uuid.charCodeAt(i);
+    if (code >= 48 && code <= 57) pin += uuid.charAt(i);
+  }
+  while (pin.length < 6) {
+    pin += String((uuid.charCodeAt(pin.length % uuid.length) + pin.length) % 10);
+  }
+  return pin.slice(0, 6);
+}
+
+function normalizeRole_(role) {
+  return String(role || "Staff").trim().toLowerCase() === "admin" ? "Admin" : "Staff";
+}
+
+function getStaffDirectory_() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(STAFF_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+
+  const columnCount = Math.max(sheet.getLastColumn(), 7);
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, columnCount).getValues();
+
+  return rows
+    .filter(function (row) { return String(row[0] || "").trim(); })
+    .map(function (row) {
+      return {
+        username: String(row[0] || "").trim().toLowerCase(),
+        name: String(row[1] || "").trim(),
+        role: normalizeRole_(row[4]),
+        status: String(row[5] || "Active").trim(),
+        mustChangePin: parseBoolean_(row[6]),
+      };
+    });
+}
+
+function findStaffRow_(username) {
+  username = String(username || "").trim().toLowerCase();
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(STAFF_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) throw new Error("No staff accounts have been configured yet.");
+
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(sheet.getLastColumn(), 7)).getValues();
+  for (let i = 0; i < rows.length; i += 1) {
+    if (String(rows[i][0] || "").trim().toLowerCase() === username) {
+      return { sheet: sheet, rowNumber: i + 2, values: rows[i] };
+    }
+  }
+
+  throw new Error("Staff account not found.");
+}
+
+function createStaffFromApp_(body) {
+  const session = getSession_(body.token || "");
+  if (!session) return { ok: false, error: "unauthorized" };
+  if (!isAdminSession_(session)) return { ok: false, error: "forbidden" };
+
+  let username = String(body.username || "").trim().toLowerCase();
+  const name = String(body.name || "").trim();
+  const role = normalizeRole_(body.role);
+  const requestedPin = String(body.defaultPin || "").trim();
+  const pin = requestedPin || generateDefaultPin_();
+
+  if (!/^[a-z0-9._-]{3,40}$/.test(username)) {
+    return { ok: false, error: "Username must be 3-40 characters using letters, numbers, dot, underscore or hyphen." };
+  }
+  if (!name) return { ok: false, error: "Staff name is required." };
+  if (pin.length < 6) return { ok: false, error: "PIN must be at least 6 characters." };
+
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(STAFF_SHEET) || getOrCreateSheet_(spreadsheet, STAFF_SHEET);
+  ensureHeaders_(sheet, STAFF_HEADERS);
+
+  if (sheet.getLastRow() > 1) {
+    const existing = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+    if (existing.some(function (row) { return String(row[0]).trim().toLowerCase() === username; })) {
+      return { ok: false, error: "That username already exists." };
+    }
+  }
+
+  const salt = Utilities.getUuid().replace(/-/g, "");
+  sheet.appendRow([username, name, hashPin_(pin, salt), salt, role, "Active", "TRUE"]);
+  return { ok: true, username: username, defaultPin: pin };
+}
+
+function setStaffStatusFromApp_(body) {
+  const session = getSession_(body.token || "");
+  if (!session) return { ok: false, error: "unauthorized" };
+  if (!isAdminSession_(session)) return { ok: false, error: "forbidden" };
+
+  const username = String(body.username || "").trim().toLowerCase();
+  const status = String(body.status || "").trim().toLowerCase() === "active" ? "Active" : "Inactive";
+
+  if (!username) return { ok: false, error: "Staff username is required." };
+  if (username === session.username && status === "Inactive") {
+    return { ok: false, error: "You cannot disable your own admin account." };
+  }
+
+  const target = findStaffRow_(username);
+  target.sheet.getRange(target.rowNumber, 6).setValue(status);
+
+  if (status === "Inactive") {
+    revokeSessionsForUsername_(username);
+  }
+
+  return { ok: true, username: username, status: status };
+}
+
+function revokeSessionsForUsername_(username) {
+  const properties = PropertiesService.getScriptProperties();
+  const values = properties.getProperties();
+  Object.keys(values).forEach(function (key) {
+    if (key.indexOf(SESSION_PREFIX) !== 0) return;
+    try {
+      const session = JSON.parse(values[key]);
+      if (String(session.username || "").trim().toLowerCase() === username) {
+        properties.deleteProperty(key);
+      }
+    } catch (error) {}
+  });
+}
+
+function resetStaffPinFromApp_(body) {
+  const session = getSession_(body.token || "");
+  if (!session) return { ok: false, error: "unauthorized" };
+  if (!isAdminSession_(session)) return { ok: false, error: "forbidden" };
+
+  const username = String(body.username || "").trim().toLowerCase();
+  if (!username) return { ok: false, error: "Staff username is required." };
+
+  const target = findStaffRow_(username);
+  const pin = generateDefaultPin_();
+  const salt = Utilities.getUuid().replace(/-/g, "");
+
+  target.sheet.getRange(target.rowNumber, 3).setValue(hashPin_(pin, salt));
+  target.sheet.getRange(target.rowNumber, 4).setValue(salt);
+  target.sheet.getRange(target.rowNumber, 7).setValue("TRUE");
+  revokeSessionsForUsername_(username);
+
+  return { ok: true, username: username, defaultPin: pin };
+}
+
+function changeOwnPin_(body) {
+  const session = getSession_(body.token || "");
+  if (!session) return { ok: false, error: "unauthorized" };
+
+  const currentPin = String(body.currentPin || "");
+  const newPin = String(body.newPin || "");
+
+  if (newPin.length < 6) return { ok: false, error: "New PIN must be at least 6 characters." };
+  if (currentPin === newPin) return { ok: false, error: "Your new PIN must be different." };
+
+  const target = findStaffRow_(session.username);
+  const currentHash = hashPin_(currentPin, String(target.values[3] || ""));
+  if (currentHash !== String(target.values[2] || "")) {
+    return { ok: false, error: "Current PIN is incorrect." };
+  }
+
+  const salt = Utilities.getUuid().replace(/-/g, "");
+  target.sheet.getRange(target.rowNumber, 3).setValue(hashPin_(newPin, salt));
+  target.sheet.getRange(target.rowNumber, 4).setValue(salt);
+  target.sheet.getRange(target.rowNumber, 7).setValue("FALSE");
+
+  return { ok: true };
+}
+
 function publicSession_(session) {
   return {
     username: session.username,
     name: session.name,
     role: session.role,
     expiresAt: session.expiresAt,
+    mustChangePin: Boolean(session.mustChangePin),
   };
 }
 
