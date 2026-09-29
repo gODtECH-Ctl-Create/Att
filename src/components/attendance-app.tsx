@@ -14,6 +14,7 @@ import {
   syncAttendanceToSheets,
 } from "@/lib/sheets-client";
 import { formatSchoolDate, formatSchoolTime, getSchoolDateKey } from "@/lib/time";
+import { useTheme } from "@/components/theme-toggle";
 import type { AttendanceRecord, StaffSession, Student } from "@/lib/types";
 
 const ALL_STUDENTS = "All students";
@@ -45,6 +46,7 @@ export function AttendanceApp() {
   const [authReady, setAuthReady] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const { dark, toggleTheme } = useTheme();
 
   const isToday = selectedDate === currentDate;
 
@@ -366,7 +368,13 @@ export function AttendanceApp() {
     return (
       <main className="auth-shell">
         <section className="auth-card">
-          <p className="eyebrow">School attendance</p>
+          <div className="auth-topbar">
+            <p className="eyebrow">School attendance</p>
+            <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}>
+              <span aria-hidden="true">{dark ? "☀" : "☾"}</span>
+              <span>{dark ? "Light" : "Dark"}</span>
+            </button>
+          </div>
           <h1>Staff sign in</h1>
           <p className="auth-copy">Sign in with the username and PIN created by the school administrator.</p>
           <span className={`pill ${online ? "online" : "offline"}`}>{online ? "Online" : "Offline"}</span>
@@ -401,7 +409,13 @@ export function AttendanceApp() {
     <main className="shell">
       <section className="staff-bar">
         <div><span>Signed in as</span><strong>{session.name}</strong><small>{session.role}</small></div>
-        <button onClick={handleLogout}>Sign out</button>
+        <div className="staff-actions">
+          <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}>
+            <span aria-hidden="true">{dark ? "☀" : "☾"}</span>
+            <span>{dark ? "Light" : "Dark"}</span>
+          </button>
+          <button onClick={handleLogout}>Sign out</button>
+        </div>
       </section>
 
       <section className="hero">
