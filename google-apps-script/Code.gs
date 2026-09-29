@@ -6,6 +6,7 @@ const SESSION_PREFIX = "attendance_session_";
 const SESSION_HOURS = 12;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_SECONDS = 600;
+const ATTENDANCE_VERSION_PREFIX = "attendance_version_";
 
 function doGet(e) {
   const params = (e && e.parameter) || {};
@@ -33,7 +34,23 @@ function doGet(e) {
     return jsonResponse({
       ok: true,
       attendance: getAttendanceByDate_(date),
+      version: getAttendanceVersion_(date),
       staff: publicSession_(session),
+    });
+  }
+
+  if (action === "attendanceVersion") {
+    const session = getSession_(params.token || "");
+    if (!session) return jsonResponse({ ok: false, error: "unauthorized" });
+
+    const date = String(params.date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return jsonResponse({ ok: false, error: "A valid attendance date is required." });
+    }
+
+    return jsonResponse({
+      ok: true,
+      version: getAttendanceVersion_(date),
     });
   }
 
@@ -362,6 +379,7 @@ function syncAttendance_(records, session) {
     }
 
     const syncedIds = [];
+    const changedDates = {};
 
     records.forEach(function (record) {
       if (!record || !record.id || !record.studentId || !record.date) return;
@@ -386,12 +404,31 @@ function syncAttendance_(records, session) {
       }
 
       syncedIds.push(String(record.id));
+      changedDates[String(record.date)] = true;
+    });
+
+    Object.keys(changedDates).forEach(function (date) {
+      bumpAttendanceVersion_(date);
     });
 
     return syncedIds;
   } finally {
     lock.releaseLock();
   }
+}
+
+function getAttendanceVersion_(date) {
+  const key = ATTENDANCE_VERSION_PREFIX + String(date || "").trim();
+  return PropertiesService.getScriptProperties().getProperty(key) || "0";
+}
+
+function bumpAttendanceVersion_(date) {
+  const key = ATTENDANCE_VERSION_PREFIX + String(date || "").trim();
+  const properties = PropertiesService.getScriptProperties();
+  const current = Number(properties.getProperty(key) || "0");
+  const next = Math.max(current + 1, Date.now());
+  properties.setProperty(key, String(next));
+  return String(next);
 }
 
 function getOrCreateSheet_(spreadsheet, name) {
