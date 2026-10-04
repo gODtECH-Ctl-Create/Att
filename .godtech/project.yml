@@ -1,0 +1,9 @@
+project:
+  state: active
+  priority: high
+  current_focus: "Attendance staff access and approval workflow"
+  next_step: "Verify the latest staff self-registration and admin approval flow across the offline-first architecture"
+  blockers:
+    - []
+  status_note: "Google Sheets is the source of truth; IndexedDB is an offline cache/sync queue."
+  last_worked_on: "2026-10-04"
